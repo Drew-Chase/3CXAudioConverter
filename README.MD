@@ -1,4 +1,4 @@
-# Audio Converter CLI
+# 3CX Audio Converter CLI
 
 This CLI application converts audio files to the 3CX audio specifications using `FFmpeg`. It automatically handles the download of `FFmpeg` if it is not already present.
 
