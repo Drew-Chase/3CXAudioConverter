@@ -6,12 +6,17 @@ use std::{fs, io};
 async fn main() {
 	let ffmpeg_path = match get_existing_ffmpeg() {
 		Some(path) => path,
-		None => {
-			download_ffmpeg().await
-		}
+		None => download_ffmpeg().await
 	};
 
-	println!("Using ffmpeg at: {}", fs::canonicalize(ffmpeg_path.ffmpeg).unwrap().to_str().unwrap()[4..].to_string());
+	match fs::canonicalize(&ffmpeg_path.ffmpeg) {
+		Ok(path) => println!("Using ffmpeg at: {}", path.to_str().unwrap()[4..].to_string()),
+		Err(err) => {
+			eprintln!("Error processing ffmpeg path: {}", err);
+			std::process::exit(1);
+		}
+	}
+
 	let args: Vec<String> = std::env::args().collect();
 	if args.len() < 2 {
 		eprintln!("Usage: {} <input>", args[0]);
@@ -19,20 +24,31 @@ async fn main() {
 	}
 
 	let input_dir = &args[1];
-	let input_dir = fs::canonicalize(input_dir).unwrap();
 
-	let output_dir = input_dir.join("output");
-	fs::create_dir_all(&output_dir).unwrap();
+	let input_dir = match fs::canonicalize(input_dir) {
+		Ok(path) => path,
+		Err(err) => {
+			eprintln!("Error processing input directory: {}", err);
+			std::process::exit(1);
+		}
+	};
 
+	let output_dir = input_dir.parent().unwrap().join("3cx-output");
+	if let Err(err) = fs::create_dir_all(&output_dir) {
+		eprintln!("Error creating output directory: {}", err);
+		std::process::exit(1);
+	}
 
-	let mut files = fs::read_dir(&input_dir).unwrap()
-	                                        .map(|res| res.map(|e| e.path()))
-	                                        .collect::<Result<Vec<_>, io::Error>>()
-	                                        .unwrap();
+	let mut files = match fs::read_dir(&input_dir) {
+		Ok(entry) => entry.map(|res| res.map(|e| e.path())).collect::<Result<Vec<_>, io::Error>>().unwrap(),
+		Err(err) => {
+			eprintln!("Error reading input directory: {}", err);
+			std::process::exit(1);
+		}
+	};
 
 	files.sort();
 
-	// We create a Vec to store the ffmpeg commands as String
 	let commands: Vec<(String, String)> = files.iter().filter_map(|file| {
 		if !file.is_file() {
 			return None;
@@ -48,13 +64,15 @@ async fn main() {
 		Some((file_name, command))
 	}).collect();
 
-	// Now we create tasks, using the Strings from the commands Vec
 	let tasks: Vec<_> = commands.iter().map(|(filename, command)| {
-		println!("Processing File: {}", filename);
+		println!("Processing file: {}", filename);
 		execute_ffmpeg_command(command)
 	}).collect();
 
-	join_all(tasks).await;
+	if let Err(e) = join_all(tasks).await.into_iter().collect::<Result<Vec<_>, _>>() {
+		eprintln!("An error occurred during processing: {}", e);
+		std::process::exit(1);
+	}
 }
 
 
@@ -147,7 +165,7 @@ pub async fn download_ffmpeg() -> FFmpegPath {
 		_ => panic!("Failed to extract ffmpeg"),
 	};
 
-	std::fs::remove_file(&ffmpeg_zip).unwrap();
+	fs::remove_file(&ffmpeg_zip).unwrap();
 
 	println!("Downloaded ffmpeg version {}", versions.version);
 
@@ -249,8 +267,9 @@ fn extract_zip(zip_path: &str, output_path: &str) -> Result<Option<String>, std:
 				let mut outfile = std::fs::File::create(&outpath)?;
 				println!("extracting: {}", outpath.display());
 				std::io::copy(&mut file, &mut outfile)?;
+
+				return Ok(Some(outpath.to_str().unwrap().to_string()));
 			}
-			return Ok(Some(filename));
 		}
 	}
 
